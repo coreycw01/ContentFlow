@@ -356,7 +356,16 @@ function IdeaCard({ idea }: { idea: Idea }) {
         >
           {on ? 'Shortlisted' : 'Compare'}
         </button>
-        <button className="btn small" onClick={() => { selectIdea(idea.id); navigate('/pipeline'); }} disabled={idea.status === 'rejected'}>
+        <button
+          className="btn small"
+          disabled={idea.status === 'rejected'}
+          onClick={() => {
+            // Selecting is the start of development, not the end of triage —
+            // go straight to the concept canvas, same as the Selection Room.
+            const id = selectIdea(idea.id);
+            if (id) navigate(`/project/${id}/concept`);
+          }}
+        >
           Select
         </button>
         <button className="btn small ghost" onClick={() => setExpanded(!expanded)}>
