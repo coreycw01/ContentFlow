@@ -53,6 +53,32 @@ export interface ScriptModeDef {
   toneNotes: string[];
 }
 
+/** Panels a channel's home is built from, in order. */
+export type HomePanel =
+  | 'next-action'
+  | 'in-flight'
+  | 'story-bank'
+  | 'legacy'
+  | 'claim-check'
+  | 'build-queue'
+  | 'materials'
+  | 'safety'
+  | 'footage'
+  | 'clip-bin'
+  | 'shorts'
+  | 'watchlist'
+  | 'quick-reaction'
+  | 'unused-material'
+  | 'lessons'
+  | 'upcoming';
+
+/** A one-click action offered on that channel's home. */
+export interface QuickAction {
+  label: string;
+  hint: string;
+  route: string;
+}
+
 export interface WorkspaceMode {
   /** Feature switches that reshape the UI when this channel is active. */
   features: {
@@ -79,6 +105,12 @@ export interface WorkspaceMode {
   };
   /** How heavy the interface should feel. */
   density: 'reflective' | 'structured' | 'fast' | 'bare';
+  /** The home screen for this channel, in order. */
+  homePanels: HomePanel[];
+  /** Channel-specific one-click actions. */
+  quickActions: QuickAction[];
+  /** What the workspace calls a project, in this channel's own vocabulary. */
+  projectNoun: string;
 }
 
 export interface Gates {
@@ -119,6 +151,8 @@ export interface ChannelDef {
   brandAssociations: string[];
   /** Priority for the "which channel needs attention?" dashboard question. */
   strategicPriority: number; // 1 = highest
+  /** Placeholder shown in the seed box — sets the expectation for this channel. */
+  seedPlaceholder: string;
 }
 
 const zeroWeights = (): Record<ScoreDimension, number> => ({
@@ -225,6 +259,13 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       },
       pressure: { consistencyWarnings: true, overdueIndicators: true, cadenceTargetDays: 10 },
       density: 'reflective',
+      projectNoun: 'essay',
+      homePanels: ['next-action', 'legacy', 'story-bank', 'in-flight', 'claim-check', 'lessons'],
+      quickActions: [
+        { label: 'Start from a story', hint: 'Pull an unresolved personal story out of the library.', route: '/library' },
+        { label: 'Argue with myself', hint: 'Counterarguments to something already published.', route: '/ideas' },
+        { label: 'Open the legacy tracker', hint: 'What the body of work currently says.', route: '/brand' },
+      ],
     },
     gates: {
       requireCoreArgument: true,
@@ -244,6 +285,7 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       'Curiosity',
     ],
     strategicPriority: 1,
+    seedPlaceholder: 'the third week · being right and being useful · what my kids will remember',
   },
 
   // -------------------------------------------------------------------------
@@ -337,6 +379,13 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       },
       pressure: { consistencyWarnings: true, overdueIndicators: true, cadenceTargetDays: 10 },
       density: 'structured',
+      projectNoun: 'build',
+      homePanels: ['next-action', 'build-queue', 'materials', 'safety', 'in-flight', 'footage'],
+      quickActions: [
+        { label: 'Buildable with what I own', hint: 'Projects needing no new purchases.', route: '/library' },
+        { label: 'Import POV footage', hint: 'Meta-glasses and job-site captures.', route: '/library' },
+        { label: 'Diagnose something', hint: 'Start a teardown from a failure.', route: '/ideas' },
+      ],
     },
     gates: {
       requireCoreArgument: true,
@@ -356,6 +405,7 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       'Curiosity',
     ],
     strategicPriority: 2,
+    seedPlaceholder: 'the burnt neutral · crimp versus solder · a print that failed at 90%',
   },
 
   // -------------------------------------------------------------------------
@@ -446,6 +496,13 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       },
       pressure: { consistencyWarnings: true, overdueIndicators: true, cadenceTargetDays: 5 },
       density: 'fast',
+      projectNoun: 'video',
+      homePanels: ['next-action', 'clip-bin', 'footage', 'shorts', 'in-flight'],
+      quickActions: [
+        { label: 'Cut from last session', hint: 'Turn recorded footage into a video.', route: '/library' },
+        { label: 'Find Shorts', hint: 'Vertical clips from what already exists.', route: '/pipeline' },
+        { label: 'Patch reaction', hint: 'Timely, low prep, high personality.', route: '/ideas' },
+      ],
     },
     gates: {
       requireCoreArgument: false,
@@ -457,6 +514,7 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
     },
     brandAssociations: ['Gaming personality', 'Systems analysis in gaming', 'Curiosity'],
     strategicPriority: 3,
+    seedPlaceholder: 'the clutch I do not deserve · dying to the same thing four times',
   },
 
   // -------------------------------------------------------------------------
@@ -541,6 +599,12 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
       },
       pressure: { consistencyWarnings: false, overdueIndicators: false, cadenceTargetDays: null },
       density: 'bare',
+      projectNoun: 'reaction',
+      homePanels: ['quick-reaction', 'watchlist', 'in-flight'],
+      quickActions: [
+        { label: 'Just react to something', hint: 'One card, no pipeline.', route: '/ideas' },
+        { label: 'What is coming out', hint: 'Trailer and release watchlist.', route: '/library' },
+      ],
     },
     gates: {
       requireCoreArgument: false,
@@ -552,6 +616,7 @@ export const CHANNELS: Record<ChannelId, ChannelDef> = {
     },
     brandAssociations: ['Comic-book history and nostalgia', 'Curiosity'],
     strategicPriority: 4,
+    seedPlaceholder: 'the scene that got me · a casting choice I was wrong about',
   },
 };
 

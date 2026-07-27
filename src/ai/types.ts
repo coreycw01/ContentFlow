@@ -29,6 +29,12 @@ export interface IdeaRequest {
   context: GenerationContext;
   origin: IdeaOrigin;
   count: number;
+  /**
+   * The word or short phrase the ideas grow from. This is the primary input —
+   * everything else narrows it. Empty means "use whatever the direction and
+   * library provide".
+   */
+  seed?: string;
   /** For follow-ups / counterarguments / continuations. */
   sourceProjectId?: string;
   /** For library-seeded generation. */

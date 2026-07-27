@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { CHANNELS, CHANNEL_IDS, topWeightedDimensions } from '../domain/channels';
 import { effortLabel } from '../domain/scoring';
+import { SEED_BANK, rollSeed } from '../domain/seeds';
 import type { ChannelId, ContentGoal, Idea, IdeaOrigin, RejectionReason } from '../domain/types';
 import { useStore } from '../store/store';
 import { Card, Chip, Empty, Field, Modal, ScoreGrid, Why } from '../ui/components';
@@ -18,16 +19,20 @@ const GOALS: { id: ContentGoal; label: string }[] = [
   { id: 'publish-fast', label: 'Publish something quickly' },
 ];
 
-const GENERATORS: { origin: IdeaOrigin; count: number; label: string; hint: string }[] = [
-  { origin: 'focused', count: 3, label: '3 focused ideas', hint: 'Tight to the topic and goal.' },
-  { origin: 'broad', count: 10, label: '10 broad ideas', hint: 'Wide spread of formats and angles.' },
-  { origin: 'deep', count: 1, label: 'One idea, developed deeply', hint: 'Worked example, counterargument, honest limit.' },
-  { origin: 'personal-experience', count: 4, label: 'From personal experience', hint: 'Rooted in what you have actually lived.' },
+/** Generators that take the seed. Origin changes how the seed is used. */
+const RUNS: { origin: IdeaOrigin; count: number; label: string; hint: string; primary?: boolean }[] = [
+  { origin: 'focused', count: 3, label: '3 angles', hint: 'Three different takes on this seed.', primary: true },
+  { origin: 'broad', count: 10, label: '10 angles', hint: 'Every angle the channel supports.' },
+  { origin: 'deep', count: 1, label: 'One, deep', hint: 'A single idea developed further.' },
+];
+
+/** Generators that ignore the seed and pull from elsewhere. */
+const SOURCES: { origin: IdeaOrigin; count: number; label: string; hint: string }[] = [
   { origin: 'library', count: 5, label: 'From my library', hint: 'Built out of material you already have.' },
-  { origin: 'external-source', count: 4, label: 'From books, games, films, events', hint: 'External sources as the seed.' },
-  { origin: 'follow-up', count: 3, label: 'Follow-ups to previous videos', hint: 'Advance an argument you already made.' },
-  { origin: 'counterargument', count: 3, label: 'Counterarguments to my videos', hint: 'Argue against your own published position.' },
-  { origin: 'series-continuation', count: 3, label: 'Series continuations', hint: 'The next chapter in an existing series.' },
+  { origin: 'personal-experience', count: 4, label: 'From experience', hint: 'Rooted in what you have lived.' },
+  { origin: 'follow-up', count: 3, label: 'Follow-ups', hint: 'Advance an argument you already made.' },
+  { origin: 'counterargument', count: 3, label: 'Counterarguments', hint: 'Argue against your own published position.' },
+  { origin: 'series-continuation', count: 3, label: 'Series continuations', hint: 'The next chapter in a series.' },
 ];
 
 const REJECTIONS: { id: RejectionReason; label: string }[] = [
@@ -51,8 +56,9 @@ export function IdeasView() {
   const busy = useStore((s) => s.busy);
   const library = useStore((s) => s.library);
 
-  const [steer, setSteer] = useState('');
-  const [manual, setManual] = useState('');
+  const [seed, setSeed] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showBank, setShowBank] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
   const ch = CHANNELS[direction.channelId];
@@ -68,19 +74,33 @@ export function IdeasView() {
     (e) => e.channelIds.length === 0 || e.channelIds.includes(direction.channelId),
   ).length;
 
+  const roll = () => {
+    const used = ideas.filter((i) => i.channelId === direction.channelId).map((i) => i.workingTitle);
+    const next = rollSeed(direction.channelId, [...used, seed]);
+    if (next) setSeed(next);
+  };
+
+  const run = (origin: IdeaOrigin, count: number, useSeed: boolean) =>
+    generateIdeas({ origin, count, seed: useSeed ? seed.trim() || undefined : undefined });
+
   return (
     <div className="col" style={{ gap: 14 }}>
-      <Card title="Stage 1 — Direction" sub="What kind of content are you trying to make right now?">
-        <Why>
-          "Generate ideas" without constraints creates generic sludge. Every field below narrows what the engine
-          is allowed to suggest.
-        </Why>
-
-        <div className="grid three">
-          <Field label="Channel">
+      {/* ------------------------------------------------------------- spark */}
+      <Card
+        title="Start with one thing"
+        sub={`A word, a phrase, a moment. Short and concrete beats broad and safe.`}
+        right={
+          <div className="row">
             <select
               value={direction.channelId}
-              onChange={(e) => setDirection({ channelId: e.target.value as ChannelId, seriesId: undefined, desiredFormatId: undefined })}
+              style={{ width: 168 }}
+              onChange={(e) =>
+                setDirection({
+                  channelId: e.target.value as ChannelId,
+                  seriesId: undefined,
+                  desiredFormatId: undefined,
+                })
+              }
             >
               {CHANNEL_IDS.map((id) => (
                 <option key={id} value={id}>
@@ -88,179 +108,218 @@ export function IdeasView() {
                 </option>
               ))}
             </select>
-          </Field>
-
-          <Field label="Series or pillar">
-            <select value={direction.seriesId ?? ''} onChange={(e) => setDirection({ seriesId: e.target.value || undefined })}>
-              <option value="">Any</option>
-              {ch.series.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field label="Desired video type">
-            <select
-              value={direction.desiredFormatId ?? ''}
-              onChange={(e) => setDirection({ desiredFormatId: e.target.value || undefined })}
-            >
-              <option value="">Let the engine choose</option>
-              {ch.formats.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-
-        <Field label="Content goals">
-          <div className="row" style={{ gap: 6 }}>
-            {GOALS.map((g) => {
-              const on = direction.goals.includes(g.id);
-              return (
-                <button
-                  key={g.id}
-                  className={`btn small${on ? ' primary' : ''}`}
-                  onClick={() =>
-                    setDirection({
-                      goals: on ? direction.goals.filter((x) => x !== g.id) : [...direction.goals, g.id],
-                    })
-                  }
-                >
-                  {g.label}
-                </button>
-              );
-            })}
           </div>
-        </Field>
-
-        <div className="grid four">
-          <Field label="Audience state">
-            <select value={direction.audienceState} onChange={(e) => setDirection({ audienceState: e.target.value as never })}>
-              <option value="cold">Cold — they don't know me</option>
-              <option value="warm">Warm — some familiarity</option>
-              <option value="core">Core — regulars</option>
-              <option value="mixed">Mixed</option>
-            </select>
-          </Field>
-          <Field label={`Available time — ${direction.availableTimeMinutes} min`}>
-            <input
-              type="range"
-              min={30}
-              max={1800}
-              step={30}
-              value={direction.availableTimeMinutes}
-              onChange={(e) => setDirection({ availableTimeMinutes: Number(e.target.value) })}
-            />
-          </Field>
-          <Field label="Energy level">
-            <select value={direction.energy} onChange={(e) => setDirection({ energy: e.target.value as never })}>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-          </Field>
-          <Field label="Timeliness">
-            <select value={direction.timeliness} onChange={(e) => setDirection({ timeliness: e.target.value as never })}>
-              <option value="evergreen">Evergreen</option>
-              <option value="seasonal">Seasonal</option>
-              <option value="this-month">This month</option>
-              <option value="this-week">This week</option>
-              <option value="now">Now</option>
-            </select>
-          </Field>
-        </div>
-
-        <div className="grid two">
-          <Field label="Topic">
-            <textarea
-              rows={2}
-              value={direction.topic}
-              placeholder="e.g. Why people keep returning to old versions of themselves"
-              onChange={(e) => setDirection({ topic: e.target.value })}
-            />
-          </Field>
-          <Field label="Personal experience available" hint="The engine will not invent lived experience you have not stated.">
-            <textarea
-              rows={2}
-              value={direction.personalExperience}
-              placeholder="e.g. Five years of intentional self-development"
-              onChange={(e) => setDirection({ personalExperience: e.target.value })}
-            />
-          </Field>
-        </div>
-
-        <Field label="Available footage or materials">
-          <textarea
-            rows={2}
-            value={direction.availableMaterials}
-            placeholder="e.g. Two Marvel Rivals sessions recorded, Meta-glasses footage from Tuesday's job, offcut aluminium"
-            onChange={(e) => setDirection({ availableMaterials: e.target.value })}
-          />
-        </Field>
-      </Card>
-
-      <Card
-        title="Stage 2 — Idea generation"
-        sub={`${ch.name} · weighting ${topWeightedDimensions(direction.channelId, 3).join(', ')} · ${libraryCount} library items in scope`}
+        }
       >
-        <Field label="Optional steer">
+        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <input
-            value={steer}
-            placeholder="e.g. around the mirror metaphor, or keep everything under ten minutes"
-            onChange={(e) => setSteer(e.target.value)}
+            style={{ flex: 1, fontSize: 16, padding: '12px 14px' }}
+            value={seed}
+            placeholder={ch.seedPlaceholder}
+            onChange={(e) => setSeed(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !busy) run('focused', 3, true);
+            }}
           />
-        </Field>
+          <button className="btn" onClick={roll} disabled={!!busy} title={`Random ${ch.name} seed`}>
+            Roll a seed
+          </button>
+        </div>
 
-        <div className="grid three">
-          {GENERATORS.map((g) => (
+        <div className="row" style={{ gap: 8 }}>
+          {RUNS.map((g) => (
             <button
               key={g.origin}
-              className="btn"
+              className={`btn${g.primary ? ' primary' : ''}`}
               disabled={!!busy}
-              style={{ textAlign: 'left', padding: '10px 12px' }}
-              onClick={() => generateIdeas({ origin: g.origin, count: g.count, steer: steer || undefined })}
+              title={g.hint}
+              onClick={() => run(g.origin, g.count, true)}
             >
-              <div style={{ fontWeight: 600 }}>{g.label}</div>
-              <div className="small dim">{g.hint}</div>
+              {g.label}
+            </button>
+          ))}
+          <button className="btn ghost small" onClick={() => setShowBank(!showBank)}>
+            {showBank ? 'Hide seed bank' : `Browse ${ch.name} seeds`}
+          </button>
+          <div className="spacer" style={{ flex: 1 }} />
+          <button className="btn ghost small" onClick={() => setShowAdvanced(!showAdvanced)}>
+            {showAdvanced ? 'Hide direction' : 'Refine direction'}
+          </button>
+        </div>
+
+        {!seed.trim() && (
+          <Why>
+            With no seed the engine falls back to your library and the channel's own bank. Typing something
+            specific — "the third week", "the burnt neutral" — is what stops the output being generic.
+          </Why>
+        )}
+
+        {showBank && (
+          <div className="col" style={{ gap: 10, marginTop: 14 }}>
+            {SEED_BANK[direction.channelId].map((group) => (
+              <div key={group.label}>
+                <div className="small dim" style={{ marginBottom: 5 }}>{group.label}</div>
+                <div className="row" style={{ gap: 5 }}>
+                  {group.seeds.map((s) => (
+                    <button
+                      key={s}
+                      className={`btn small${seed === s ? ' primary' : ''}`}
+                      onClick={() => setSeed(s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* --------------------------------------------------- optional refine */}
+      {showAdvanced && (
+        <Card title="Direction" sub="Optional. Every field here narrows what the engine may suggest.">
+          <div className="grid three">
+            <Field label="Series or pillar">
+              <select value={direction.seriesId ?? ''} onChange={(e) => setDirection({ seriesId: e.target.value || undefined })}>
+                <option value="">Any</option>
+                {ch.series.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Desired video type">
+              <select
+                value={direction.desiredFormatId ?? ''}
+                onChange={(e) => setDirection({ desiredFormatId: e.target.value || undefined })}
+              >
+                <option value="">Let the engine choose</option>
+                {ch.formats.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Timeliness">
+              <select value={direction.timeliness} onChange={(e) => setDirection({ timeliness: e.target.value as never })}>
+                <option value="evergreen">Evergreen</option>
+                <option value="seasonal">Seasonal</option>
+                <option value="this-month">This month</option>
+                <option value="this-week">This week</option>
+                <option value="now">Now</option>
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Content goals">
+            <div className="row" style={{ gap: 6 }}>
+              {GOALS.map((g) => {
+                const on = direction.goals.includes(g.id);
+                return (
+                  <button
+                    key={g.id}
+                    className={`btn small${on ? ' primary' : ''}`}
+                    onClick={() =>
+                      setDirection({
+                        goals: on ? direction.goals.filter((x) => x !== g.id) : [...direction.goals, g.id],
+                      })
+                    }
+                  >
+                    {g.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+
+          <div className="grid three">
+            <Field label="Audience state">
+              <select value={direction.audienceState} onChange={(e) => setDirection({ audienceState: e.target.value as never })}>
+                <option value="cold">Cold — they don't know me</option>
+                <option value="warm">Warm — some familiarity</option>
+                <option value="core">Core — regulars</option>
+                <option value="mixed">Mixed</option>
+              </select>
+            </Field>
+            <Field label={`Available time — ${direction.availableTimeMinutes} min`}>
+              <input
+                type="range"
+                min={30}
+                max={1800}
+                step={30}
+                value={direction.availableTimeMinutes}
+                onChange={(e) => setDirection({ availableTimeMinutes: Number(e.target.value) })}
+              />
+            </Field>
+            <Field label="Energy level">
+              <select value={direction.energy} onChange={(e) => setDirection({ energy: e.target.value as never })}>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid two">
+            <Field label="Personal experience available" hint="The engine will not invent lived experience you have not stated.">
+              <textarea
+                rows={2}
+                value={direction.personalExperience}
+                placeholder="e.g. Five years of intentional self-development"
+                onChange={(e) => setDirection({ personalExperience: e.target.value })}
+              />
+            </Field>
+            <Field label="Available footage or materials">
+              <textarea
+                rows={2}
+                value={direction.availableMaterials}
+                placeholder="e.g. Two Marvel Rivals sessions recorded, Meta-glasses footage from Tuesday"
+                onChange={(e) => setDirection({ availableMaterials: e.target.value })}
+              />
+            </Field>
+          </div>
+        </Card>
+      )}
+
+      {/* ------------------------------------------------------ other sources */}
+      <Card
+        title="Or pull from somewhere else"
+        sub={`${libraryCount} library items in scope for ${ch.name}.`}
+      >
+        <div className="row" style={{ gap: 6 }}>
+          {SOURCES.map((g) => (
+            <button key={g.origin} className="btn small" disabled={!!busy} title={g.hint} onClick={() => run(g.origin, g.count, false)}>
+              {g.label}
             </button>
           ))}
         </div>
-
-        <div className="row" style={{ marginTop: 14 }}>
+        <div className="row" style={{ marginTop: 12 }}>
           <input
             style={{ flex: 1 }}
-            value={manual}
             placeholder="Or capture a raw idea in your own words…"
-            onChange={(e) => setManual(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && manual.trim()) {
-                addManualIdea(manual.trim());
-                setManual('');
+              const v = (e.target as HTMLInputElement).value;
+              if (e.key === 'Enter' && v.trim()) {
+                addManualIdea(v.trim());
+                (e.target as HTMLInputElement).value = '';
               }
             }}
           />
-          <button
-            className="btn"
-            disabled={!manual.trim()}
-            onClick={() => {
-              addManualIdea(manual.trim());
-              setManual('');
-            }}
-          >
-            Capture
-          </button>
         </div>
       </Card>
 
+      {/* -------------------------------------------------------------- cards */}
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0 }}>
           {visible.length} idea{visible.length === 1 ? '' : 's'} on {ch.name}
         </h3>
         <div className="row">
+          <span className="small dim">
+            weighted on {topWeightedDimensions(direction.channelId, 2).join(' + ')}
+          </span>
           <button className="btn small ghost" onClick={() => setShowAll(!showAll)}>
             {showAll ? 'Hide rejected' : 'Show rejected'}
           </button>
@@ -271,7 +330,7 @@ export function IdeasView() {
       </div>
 
       {visible.length === 0 ? (
-        <Empty>No ideas yet on this channel. Set the direction above, then generate.</Empty>
+        <Empty>Nothing yet. Type a seed above, or roll one.</Empty>
       ) : (
         <div className="grid two">
           {visible.map((idea) => (
@@ -323,9 +382,7 @@ function IdeaCard({ idea }: { idea: Idea }) {
 
       {expanded && (
         <div className="col small" style={{ gap: 8, marginBottom: 10 }}>
-          {idea.viewerProblem && (
-            <div><span className="dim">Viewer problem: </span>{idea.viewerProblem}</div>
-          )}
+          {idea.viewerProblem && <div><span className="dim">Viewer problem: </span>{idea.viewerProblem}</div>}
           {idea.corePromise && <div><span className="dim">Core promise: </span>{idea.corePromise}</div>}
           {idea.authorityBasis && <div><span className="dim">Why Corey: </span>{idea.authorityBasis}</div>}
           {idea.emotionalAngle && <div><span className="dim">Emotional angle: </span>{idea.emotionalAngle}</div>}
@@ -360,8 +417,6 @@ function IdeaCard({ idea }: { idea: Idea }) {
           className="btn small"
           disabled={idea.status === 'rejected'}
           onClick={() => {
-            // Selecting is the start of development, not the end of triage —
-            // go straight to the concept canvas, same as the Selection Room.
             const id = selectIdea(idea.id);
             if (id) navigate(`/project/${id}/concept`);
           }}
@@ -375,31 +430,18 @@ function IdeaCard({ idea }: { idea: Idea }) {
           <button className="btn small ghost" onClick={() => critiqueIdea(idea.id)} disabled={!!busy}>
             Why is this weak?
           </button>
-          <button className="btn small ghost" onClick={() => setAdapting(true)}>
-            Adapt
-          </button>
-          <button className="btn small ghost" onClick={() => saveIdeaForLater(idea.id)}>
-            Save
-          </button>
-          <button className="btn small ghost danger" onClick={() => setRejecting(true)}>
-            Reject
-          </button>
+          <button className="btn small ghost" onClick={() => setAdapting(true)}>Adapt</button>
+          <button className="btn small ghost" onClick={() => saveIdeaForLater(idea.id)}>Save</button>
+          <button className="btn small ghost danger" onClick={() => setRejecting(true)}>Reject</button>
         </div>
       </div>
 
       {rejecting && (
         <Modal title="Why are you rejecting this?" onClose={() => setRejecting(false)}>
-          <Why>Rejection reasons improve future generation — the engine will down-weight the patterns you keep turning down.</Why>
+          <Why>Rejection reasons improve future generation — the engine down-weights the patterns you keep turning down.</Why>
           <div className="row" style={{ gap: 6 }}>
             {REJECTIONS.map((r) => (
-              <button
-                key={r.id}
-                className="btn small"
-                onClick={() => {
-                  rejectIdea(idea.id, r.id);
-                  setRejecting(false);
-                }}
-              >
+              <button key={r.id} className="btn small" onClick={() => { rejectIdea(idea.id, r.id); setRejecting(false); }}>
                 {r.label}
               </button>
             ))}
@@ -415,14 +457,7 @@ function IdeaCard({ idea }: { idea: Idea }) {
           </Why>
           <div className="row" style={{ gap: 6 }}>
             {CHANNEL_IDS.filter((c) => c !== idea.channelId).map((c) => (
-              <button
-                key={c}
-                className="btn small"
-                onClick={() => {
-                  adaptIdea(idea.id, c);
-                  setAdapting(false);
-                }}
-              >
+              <button key={c} className="btn small" onClick={() => { adaptIdea(idea.id, c); setAdapting(false); }}>
                 {CHANNELS[c].name}
               </button>
             ))}

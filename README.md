@@ -9,7 +9,7 @@ production task and performance result belongs to exactly one.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 43 tests covering the channel doctrine and the engine
+npm test         # 74 tests covering the doctrine, the scanner and the generators
 npm run build
 ```
 
@@ -47,9 +47,30 @@ These properties are enforced by tests, not by convention — see
 
 ---
 
+## Each channel is its own workspace
+
+Switching channel changes the home screen, not just the accent colour. The panels, the vocabulary and
+the quick actions all come from that channel's definition:
+
+| | Home panels | Calls a project | Quick actions |
+|---|---|---|---|
+| Corey Williams | body of work · story bank · claim checker · lessons | an **essay** | start from a story, argue with myself |
+| Core Workshop | build queue · shopping and shot list · safety check | a **build** | buildable with what I own, import POV footage |
+| CDogg | clip bin · unused footage · Shorts queue | a **video** | cut from last session, find Shorts |
+| World's Finest | seen something? · watchlist | a **reaction** | just react to something |
+
+World's Finest gets three panels and no counters — no queue, no legacy tracker, no lessons panel,
+nothing that accumulates or nags.
+
 ## Workflow
 
-**1. Direction** — channel, series, goals, audience state, available time, materials, energy,
+**0. A seed** — one word or short phrase is the primary input: "the third week", "the burnt neutral",
+"the clutch I do not deserve". Type one, or roll a random seed from that channel's own bank (the banks
+never overlap between channels). Generation puts the seed in every title and varies the *angle*, so ten
+ideas are ten takes on your thing rather than ten unrelated topics. The full direction form is still
+there, collapsed, for when you want to narrow further.
+
+**1. Direction (optional)** — channel, series, goals, audience state, available time, materials, energy,
 timeliness, personal experience. Generating ideas without constraints produces generic sludge, so
 this comes first.
 
@@ -79,8 +100,20 @@ music, sound FX, source and editing-note tracks. B-roll suggestions distinguish 
 easy-to-record, archival, screen recordings, gameplay, project closeups, generated images, diagrams,
 stock, text-only — and **no-B-roll**, because constant coverage is not automatically good editing.
 
+**7b. Script doc and the scanner** — keep the script here, paste it in, or store a Google Docs link
+beside it. The scanner reads the script and pulls out everything it asks you to produce:
+`[IMAGE: …]`, `[B-ROLL: …]`, `[GRAPHIC: …]`, `[SCREEN: …]`, `[GAMEPLAY: …]`, `[SOURCE: …]`,
+`[TODO: …]`, or a whole line written as `B-ROLL: something`. Each becomes a tracked shot you cycle
+through needed → have → done, with an image prompt generated for image and graphic kinds. Re-scanning
+never loses what you have already ticked.
+
 **8. Production board** — generated from the actual script and timeline, not a static checklist. Each
-task shows what it derives from. No gameplay beat, no gameplay task.
+task shows what it derives from. No gameplay beat, no gameplay task. Scanned assets become tasks too,
+labelled with the script line they came from.
+
+**8b. Video status** — recorded / edited / uploaded, tracked separately from the pipeline stage,
+because where the work *is* and what physically *exists* are different questions. The Pipeline's Video
+board lanes projects by what is in the can. Marking a step advances the stage automatically.
 
 **9. Review** — four separate results kept apart on purpose: packaging (did they click), content (did
 they keep watching), brand (did it strengthen the intended identity), creator (were you proud, was

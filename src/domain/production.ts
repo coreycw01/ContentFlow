@@ -112,6 +112,28 @@ export function generateProductionTasks(project: ContentProject): ProductionTask
     tasks.push(task(phase, make(count), 'B-roll suggestions on the timeline'));
   }
 
+  // Anything the script itself asked for, from the scanner.
+  const ASSET_PHASE: Record<string, ProductionTask['phase']> = {
+    image: 'post', graphic: 'post', source: 'pre',
+    'b-roll': 'recording', 'screen-recording': 'recording', gameplay: 'recording',
+    placeholder: 'pre',
+  };
+  const ASSET_VERB: Record<string, string> = {
+    image: 'Generate image', graphic: 'Build graphic', source: 'Verify source',
+    'b-roll': 'Shoot B-roll', 'screen-recording': 'Capture screen', gameplay: 'Pull gameplay',
+    placeholder: 'Fill placeholder',
+  };
+  for (const a of project.assets) {
+    if (a.status === 'done') continue;
+    tasks.push(
+      task(
+        ASSET_PHASE[a.kind] ?? 'recording',
+        `${ASSET_VERB[a.kind] ?? 'Source'}: ${a.description}`,
+        `Script line ${a.line}`,
+      ),
+    );
+  }
+
   if (ch.workspace.features.momentMarkers) {
     tasks.push(task('recording', 'Drop moment markers during capture', 'Channel mode: moment-led'));
   }

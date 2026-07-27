@@ -6,6 +6,7 @@ import { uid } from '../ai/text';
 import type { GenerationContext, IdeaRequest } from '../ai/types';
 import { CHANNELS, emptyScoreCard } from '../domain/channels';
 import { generateProductionTasks, mergeProductionTasks } from '../domain/production';
+import { assembleFromBeats, countWords, emptyScriptDoc, scanScript } from '../domain/scriptScan';
 import { nextAction } from '../domain/readiness';
 import { buildReview, emptyPerformanceInputs } from '../domain/review';
 import { scoreIdea } from '../domain/scoring';
@@ -22,9 +23,12 @@ import type {
   PerformanceInputs,
   Priority,
   RejectionReason,
+  ScannedAsset,
+  ScriptDoc,
   SectionAction,
   Settings,
   Stage,
+  VideoStatusKey,
 } from '../domain/types';
 import { seedLibrary } from './seed';
 
@@ -84,7 +88,7 @@ export interface AppState {
   setDirection: (patch: Partial<Direction>) => void;
 
   // --- ideas ---
-  generateIdeas: (opts: { origin: IdeaOrigin; count: number; steer?: string; sourceEntryIds?: string[]; sourceProjectId?: string }) => Promise<void>;
+  generateIdeas: (opts: { origin: IdeaOrigin; count: number; seed?: string; steer?: string; sourceEntryIds?: string[]; sourceProjectId?: string }) => Promise<void>;
   critiqueIdea: (ideaId: string) => Promise<void>;
   addManualIdea: (workingTitle: string) => void;
   toggleShortlist: (ideaId: string) => void;
@@ -124,6 +128,16 @@ export interface AppState {
   toggleTask: (id: string, taskId: string) => void;
   addTask: (id: string, phase: 'pre' | 'recording' | 'post', label: string) => void;
 
+  // --- script document & assets ---
+  setScriptDoc: (id: string, patch: Partial<ScriptDoc>) => void;
+  importScriptFromBeats: (id: string) => void;
+  scanScriptAssets: (id: string) => number;
+  updateAsset: (id: string, assetId: string, patch: Partial<ScannedAsset>) => void;
+  assetToLibrary: (id: string, assetId: string) => void;
+
+  // --- video status ---
+  setVideoStatus: (id: string, key: VideoStatusKey, done: boolean) => void;
+
   saveReview: (id: string, inputs: PerformanceInputs) => Promise<void>;
 
   // --- library ---
@@ -159,7 +173,10 @@ function projectFromIdea(idea: Idea): ContentProject {
     },
     packaging: { titles: [], hooks: [], thumbnails: [], curiosityGaps: [], stakes: [], emotionalFraming: [] },
     script: { beats: [], estimatedDurationSeconds: 0, chapterMarkers: [] },
+    scriptDoc: emptyScriptDoc(),
+    assets: [],
     production: [],
+    videoStatus: {},
     brandAssociations: CHANNELS[idea.channelId].brandAssociations.slice(0, 2),
     notes: '',
     effort: idea.effort,
@@ -235,6 +252,7 @@ export const useStore = create<AppState>()(
             context: s.context(),
             origin: opts.origin,
             count: opts.count,
+            seed: opts.seed,
             steer: opts.steer,
             sourceEntryIds: opts.sourceEntryIds,
             sourceProjectId: opts.sourceProjectId,
@@ -701,6 +719,87 @@ export const useStore = create<AppState>()(
                 }
               : p,
           ),
+        })),
+
+      // ------------------------------------------------- script doc & assets
+      setScriptDoc: (id, patch) =>
+        set((s) => ({
+          projects: s.projects.map((p) => {
+            if (p.id !== id) return p;
+            const scriptDoc = { ...p.scriptDoc, ...patch };
+            scriptDoc.wordCount = countWords(scriptDoc.content);
+            scriptDoc.updatedAt = now();
+            return { ...p, scriptDoc, updatedAt: now() };
+          }),
+        })),
+
+      importScriptFromBeats: (id) => {
+        const p = get().projects.find((x) => x.id === id);
+        if (!p || p.script.beats.length === 0) return;
+        get().setScriptDoc(id, {
+          content: assembleFromBeats(p.script.beats),
+          source: 'assembled',
+        });
+        get().scanScriptAssets(id);
+      },
+
+      scanScriptAssets: (id) => {
+        const p = get().projects.find((x) => x.id === id);
+        if (!p) return 0;
+        // Existing assets are passed in so a rescan keeps "have"/"done" marks.
+        const { assets } = scanScript(p.scriptDoc.content, p.assets);
+        get().updateProject(id, { assets });
+        return assets.length;
+      },
+
+      updateAsset: (id, assetId, patch) =>
+        set((s) => ({
+          projects: s.projects.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  assets: p.assets.map((a) => (a.id === assetId ? { ...a, ...patch } : a)),
+                  updatedAt: now(),
+                }
+              : p,
+          ),
+        })),
+
+      assetToLibrary: (id, assetId) => {
+        const p = get().projects.find((x) => x.id === id);
+        const asset = p?.assets.find((a) => a.id === assetId);
+        if (!p || !asset) return;
+        get().addLibraryEntry({
+          type: asset.kind === 'source' ? 'research' : 'b-roll',
+          title: asset.description,
+          body: `From "${p.workingTitle}" (${asset.kind}). ${asset.imagePrompt ?? ''}`.trim(),
+          tags: [asset.kind],
+          channelIds: [p.channelId],
+          brandAssociations: p.brandAssociations,
+          used: false,
+        });
+        get().updateAsset(id, assetId, { status: 'have' });
+      },
+
+      // --------------------------------------------------------- video status
+      setVideoStatus: (id, key, done) =>
+        set((s) => ({
+          projects: s.projects.map((p) => {
+            if (p.id !== id) return p;
+            const videoStatus = { ...p.videoStatus, [key]: done ? now() : undefined };
+            // Keep the pipeline stage honest about what physically exists.
+            let stage = p.stage;
+            if (key === 'recordedAt' && done && ['ready-to-record', 'recording'].includes(p.stage)) stage = 'editing';
+            if (key === 'editedAt' && done && p.stage === 'editing') stage = 'scheduled';
+            if (key === 'uploadedAt' && done && ['editing', 'scheduled'].includes(p.stage)) stage = 'published';
+            return {
+              ...p,
+              videoStatus,
+              stage,
+              publishedAt: key === 'uploadedAt' && done && !p.publishedAt ? now() : p.publishedAt,
+              updatedAt: now(),
+            };
+          }),
         })),
 
       // --------------------------------------------------------------- review

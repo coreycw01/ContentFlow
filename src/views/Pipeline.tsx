@@ -8,8 +8,9 @@ import type { ContentProject, Priority, Stage } from '../domain/types';
 import { useStore } from '../store/store';
 import { Card, Chip, Empty, relativeDays } from '../ui/components';
 import { navigate } from '../ui/router';
+import { VideoChips } from './ChannelHome';
 
-type Layout = 'kanban' | 'table' | 'channel' | 'priority' | 'timeline';
+type Layout = 'kanban' | 'video' | 'table' | 'channel' | 'priority' | 'timeline';
 
 const PRIORITY_ORDER: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 
@@ -37,7 +38,7 @@ export function PipelineView() {
     <div className="col" style={{ gap: 14 }}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <div className="row" style={{ gap: 4 }}>
-          {(['kanban', 'table', 'channel', 'priority', 'timeline'] as Layout[]).map((l) => (
+          {(['kanban', 'video', 'table', 'channel', 'priority', 'timeline'] as Layout[]).map((l) => (
             <button
               key={l}
               className={`btn small${layout === l ? ' primary' : ''}`}
@@ -51,6 +52,7 @@ export function PipelineView() {
       </div>
 
       {layout === 'kanban' && <Kanban projects={scoped} onMove={setStage} />}
+      {layout === 'video' && <VideoBoard projects={scoped} />}
       {layout === 'table' && <TableView projects={scoped} />}
       {layout === 'channel' && <ChannelView projects={scoped} />}
       {layout === 'priority' && <PriorityView projects={scoped} />}
@@ -75,8 +77,11 @@ function ProjectCard({ p, onMove }: { p: ContentProject; onMove?: (id: string, s
           <Chip tone={p.priority === 'urgent' ? 'bad' : p.priority === 'high' ? 'warn' : undefined}>{p.priority}</Chip>
         )}
       </div>
-      <div className="m">
-        Value {p.contentValue} · Virality {p.viralityScore} · {effortLabel(p.effort)} effort
+      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+        <span className="m">
+          Value {p.contentValue} · {effortLabel(p.effort)} effort
+        </span>
+        <VideoChips project={p} />
       </div>
       <div className="m" style={{ marginTop: 4 }}>Next: {na.label}</div>
       {p.blocker && <div className="m" style={{ color: 'var(--bad)' }}>Blocked: {p.blocker}</div>}
@@ -97,6 +102,91 @@ function ProjectCard({ p, onMove }: { p: ContentProject; onMove?: (id: string, s
           </select>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The video board tracks what physically exists, which is a different question
+ * from where the work is in the pipeline. A video can be recorded and edited
+ * and still be sitting unpublished.
+ */
+function VideoBoard({ projects }: { projects: ContentProject[] }) {
+  const setVideoStatus = useStore((s) => s.setVideoStatus);
+
+  const LANES: { key: string; label: string; why: string; match: (p: ContentProject) => boolean }[] = [
+    {
+      key: 'not-shot',
+      label: 'Not shot',
+      why: 'Nothing in the can yet.',
+      match: (p) => !p.videoStatus.recordedAt,
+    },
+    {
+      key: 'recorded',
+      label: 'Recorded',
+      why: 'Footage exists, edit not finished.',
+      match: (p) => !!p.videoStatus.recordedAt && !p.videoStatus.editedAt,
+    },
+    {
+      key: 'edited',
+      label: 'Edited',
+      why: 'Cut and ready, not uploaded.',
+      match: (p) => !!p.videoStatus.editedAt && !p.videoStatus.uploadedAt,
+    },
+    {
+      key: 'uploaded',
+      label: 'Uploaded',
+      why: 'Live or scheduled on the platform.',
+      match: (p) => !!p.videoStatus.uploadedAt,
+    },
+  ];
+
+  return (
+    <div className="kanban">
+      {LANES.map((lane) => {
+        const items = projects.filter(lane.match);
+        return (
+          <div key={lane.key} className="kanban-col" style={{ width: 280 }}>
+            <h4>
+              <span>{lane.label}</span>
+              <span>{items.length}</span>
+            </h4>
+            <div className="small dim" style={{ marginBottom: 8, fontSize: 11, lineHeight: 1.4 }}>{lane.why}</div>
+            {items.length === 0 && <div className="small dim" style={{ padding: '8px 0' }}>—</div>}
+            {items.map((p) => (
+              <div key={p.id} className="pcard" style={{ borderLeftColor: CHANNELS[p.channelId].accent }}>
+                <div className="t" onClick={() => navigate(`/project/${p.id}/concept`)} style={{ cursor: 'pointer' }}>
+                  {p.workingTitle}
+                </div>
+                <div className="m" style={{ marginBottom: 8 }}>
+                  {CHANNELS[p.channelId].name} · {stageDef(p.stage).label}
+                </div>
+                <div className="row" style={{ gap: 4 }}>
+                  {(
+                    [
+                      ['recordedAt', 'Recorded'],
+                      ['editedAt', 'Edited'],
+                      ['uploadedAt', 'Uploaded'],
+                    ] as const
+                  ).map(([key, label]) => {
+                    const on = !!p.videoStatus[key];
+                    return (
+                      <button
+                        key={key}
+                        className={`btn small${on ? ' primary' : ''}`}
+                        style={{ fontSize: 11, padding: '3px 7px' }}
+                        onClick={() => setVideoStatus(p.id, key, !on)}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -139,6 +229,7 @@ function TableView({ projects }: { projects: ContentProject[] }) {
               <th className="num">Value</th>
               <th className="num">Virality</th>
               <th>Effort</th>
+              <th>Video</th>
               <th>Next action</th>
               <th>Blocker</th>
               <th>Target</th>
@@ -157,6 +248,11 @@ function TableView({ projects }: { projects: ContentProject[] }) {
                   <td className="num">{p.contentValue}</td>
                   <td className="num">{p.viralityScore}</td>
                   <td>{effortLabel(p.effort)}</td>
+                  <td className="nowrap">
+                    {[['recordedAt','R'],['editedAt','E'],['uploadedAt','U']].map(([k,l]) => (
+                      <span key={l} style={{ opacity: p.videoStatus[k as 'recordedAt'] ? 1 : 0.25, marginRight: 4 }}>{l}</span>
+                    ))}
+                  </td>
                   <td className="dim">{nextAction(p).label}</td>
                   <td style={{ color: p.blocker ? 'var(--bad)' : undefined }}>{p.blocker ?? '—'}</td>
                   <td className="nowrap">{p.targetPublishDate ?? '—'}</td>

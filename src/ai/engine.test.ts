@@ -18,7 +18,10 @@ const project = (over: Partial<ContentProject> & Pick<ContentProject, 'channelId
   },
   packaging: { titles: [], hooks: [], thumbnails: [], curiosityGaps: [], stakes: [], emotionalFraming: [] },
   script: { beats: [], estimatedDurationSeconds: 0, chapterMarkers: [] },
+  scriptDoc: { content: '', source: 'app', wordCount: 0 },
+  assets: [],
   production: [],
+  videoStatus: {},
   brandAssociations: [],
   notes: '',
   effort: 'medium',
@@ -37,7 +40,13 @@ describe('shortSubject', () => {
   });
 
   it('keeps a short noun phrase', () => {
-    expect(shortSubject('a failed breaker panel')).toBe('failed breaker panel');
+    expect(shortSubject('a failed breaker panel')).toBe('a failed breaker panel');
+  });
+
+  it('keeps the leading article so templates stay grammatical', () => {
+    // "The Case Against Third Week" is the failure this guards against.
+    expect(shortSubject('the third week')).toBe('the third week');
+    expect(shortSubject('the clutch I do not deserve')).toBe('the clutch I do not deserve');
   });
 });
 
@@ -174,5 +183,68 @@ describe('title delivery check', () => {
     const result = await localEngine.checkTitleDelivery(p);
     expect(result.delivered).toBe(false);
     expect(result.note).toMatch(/absolute language|narrow the title/i);
+  });
+});
+
+describe('seed-driven generation', () => {
+  const ctx = (channelId: 'corey-williams' | 'core-workshop' | 'cdogg' | 'worlds-finest') => ({
+    direction: {
+      channelId, goals: ['authority' as const], audienceState: 'mixed' as const,
+      availableTimeMinutes: 360, availableMaterials: '', energy: 'medium' as const,
+      timeliness: 'evergreen' as const, personalExperience: 'five years of doing this', topic: '',
+    },
+    library: [], history: [], rejectionSignals: [], lessons: [],
+  });
+
+  it('puts the seed in every title it generates', async () => {
+    const ideas = await localEngine.generateIdeas({
+      context: ctx('core-workshop'), origin: 'focused', count: 3, seed: 'the burnt neutral',
+    });
+    expect(ideas).toHaveLength(3);
+    for (const i of ideas) {
+      expect(i.workingTitle.toLowerCase()).toContain('burnt neutral');
+    }
+  });
+
+  it('keeps the article so titles stay grammatical', async () => {
+    const ideas = await localEngine.generateIdeas({
+      context: ctx('corey-williams'), origin: 'focused', count: 6, seed: 'the third week',
+    });
+    for (const i of ideas) {
+      // Guards "The Case Against Third Week".
+      expect(i.workingTitle).not.toMatch(/\b(Against|About|With|Of)\s+Third Week/);
+    }
+  });
+
+  it('gives distinct angles rather than the same title repeated', async () => {
+    const ideas = await localEngine.generateIdeas({
+      context: ctx('cdogg'), origin: 'broad', count: 8, seed: 'the clutch I do not deserve',
+    });
+    expect(new Set(ideas.map((i) => i.workingTitle)).size).toBe(ideas.length);
+  });
+
+  it('never produces a title longer than a title bar', async () => {
+    for (const cid of ['corey-williams', 'core-workshop', 'cdogg', 'worlds-finest'] as const) {
+      const ideas = await localEngine.generateIdeas({
+        context: ctx(cid), origin: 'broad', count: 6, seed: 'the thing that failed',
+      });
+      for (const i of ideas) expect(i.workingTitle.length).toBeLessThanOrEqual(90);
+    }
+  });
+
+  it('falls back to the channel seed bank when given nothing at all', async () => {
+    const ideas = await localEngine.generateIdeas({
+      context: ctx('worlds-finest'), origin: 'focused', count: 2,
+    });
+    expect(ideas.length).toBe(2);
+    // Ungrounded ideas must be flagged, not passed off as lived.
+    expect(ideas.every((i) => i.originalityWarnings.length > 0)).toBe(true);
+  });
+
+  it('uses each channel’s own angles, not a shared set', async () => {
+    const cw = await localEngine.generateIdeas({ context: ctx('corey-williams'), origin: 'broad', count: 8, seed: 'the same seed' });
+    const cd = await localEngine.generateIdeas({ context: ctx('cdogg'), origin: 'broad', count: 8, seed: 'the same seed' });
+    const overlap = cw.map((i) => i.workingTitle).filter((t) => cd.some((c) => c.workingTitle === t));
+    expect(overlap).toHaveLength(0);
   });
 });

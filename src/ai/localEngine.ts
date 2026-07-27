@@ -11,7 +11,8 @@
  * or that lack personal evidence get warnings and score penalties.
  */
 
-import { CHANNELS, emptyScoreCard, formatOf, seriesOf } from '../domain/channels';
+import { CHANNELS, emptyScoreCard, formatOf } from '../domain/channels';
+import { rollSeed } from '../domain/seeds';
 import { scoreIdea } from '../domain/scoring';
 import { assessCoreArgument } from '../domain/readiness';
 import type {
@@ -53,77 +54,99 @@ import {
 } from './text';
 
 // ---------------------------------------------------------------------------
-// Seed material
+// Seeds
 // ---------------------------------------------------------------------------
 
-interface Subject {
-  /** Short noun phrase used inside titles. */
-  phrase: string;
-  /** Longer descriptive text for premises. */
+/**
+ * A seed is the short, concrete phrase an idea grows from — "the third week",
+ * "the burnt neutral", "the clutch I do not deserve". Keeping it short is what
+ * makes the templates below read like sentences instead of like mail merge.
+ */
+interface Seed {
+  /** Short phrase, title-ready. */
+  text: string;
+  /** Any longer context behind it. */
   detail: string;
-  /** Keyword for search-shaped titles. */
-  keyword: string;
   /** Lived evidence backing it, if any. */
   experience: string;
   entryId?: string;
-  /** True when the subject came from real library material or stated experience. */
+  /** True when it came from real library material or stated experience. */
   grounded: boolean;
 }
 
-function buildSubjects(ctx: GenerationContext, req: IdeaRequest): Subject[] {
-  const { direction, library } = ctx;
-  const out: Subject[] = [];
-  const chLibrary = library.filter(
-    (e) => e.channelIds.length === 0 || e.channelIds.includes(direction.channelId),
-  );
+/** Title-case for the start of a title. */
+const Cap = (s: string) => titleCase(s);
+/** Lower-case for mid-sentence use. */
+const low = (s: string) => lowerFirst(s);
 
-  if (direction.topic.trim()) {
-    out.push({
-      phrase: subjectPhrase(direction.topic),
-      detail: direction.topic.trim(),
-      keyword: keywords(direction.topic, 3).join(' ') || direction.topic.slice(0, 24),
+function buildSeeds(ctx: GenerationContext, req: IdeaRequest): Seed[] {
+  const { direction, library } = ctx;
+  const out: Seed[] = [];
+  const push = (s: Seed) => {
+    if (s.text.trim() && !out.some((x) => x.text.toLowerCase() === s.text.toLowerCase())) out.push(s);
+  };
+
+  // 1. An explicit seed always leads — this is what the user typed or rolled.
+  if (req.seed?.trim()) {
+    push({
+      text: shortSubject(req.seed, 9) ?? req.seed.trim(),
+      detail: req.seed.trim(),
       experience: direction.personalExperience.trim(),
       grounded: Boolean(direction.personalExperience.trim()),
     });
   }
 
-  const wanted = req.sourceEntryIds?.length
+  // 2. Library material named explicitly.
+  const named = req.sourceEntryIds?.length
     ? library.filter((e) => req.sourceEntryIds!.includes(e.id))
-    : chLibrary.filter((e) =>
-        ['personal-story', 'lesson', 'build-project', 'gameplay-moment', 'movie-reaction', 'raw-idea', 'framework', 'book', 'technical-explanation'].includes(e.type),
-      );
-
-  for (const e of wanted) {
-    out.push({
-      phrase: subjectPhrase(e.title),
+    : [];
+  for (const e of named) {
+    push({
+      text: shortSubject(e.title, 9) ?? e.title,
       detail: e.body || e.title,
-      keyword: keywords(`${e.title} ${e.tags.join(' ')}`, 3).join(' ') || e.title,
-      experience: e.type === 'personal-story' || e.type === 'lesson' || e.type === 'build-project' ? e.body : '',
+      experience: ['personal-story', 'lesson', 'build-project'].includes(e.type) ? e.body : '',
       entryId: e.id,
       grounded: true,
     });
   }
 
-  if (direction.personalExperience.trim() && out.length < 3) {
-    out.push({
-      phrase: subjectPhrase(direction.personalExperience),
-      detail: direction.personalExperience.trim(),
-      keyword: keywords(direction.personalExperience, 3).join(' '),
+  // 3. The direction topic, when one was set.
+  if (direction.topic.trim()) {
+    push({
+      text: shortSubject(direction.topic, 9) ?? subjectPhrase(direction.topic),
+      detail: direction.topic.trim(),
       experience: direction.personalExperience.trim(),
-      grounded: true,
+      grounded: Boolean(direction.personalExperience.trim()),
     });
   }
 
-  if (out.length === 0) {
-    const s = seriesOf(direction.channelId, direction.seriesId);
-    out.push({
-      phrase: s ? subjectPhrase(s.name) : 'the thing you keep circling',
-      detail: s?.description ?? 'No topic given, so this is a shot in the dark.',
-      keyword: s?.name ?? '',
-      experience: '',
-      grounded: false,
-    });
+  // 4. Fall back to unused library material for this channel.
+  if (out.length < 3) {
+    const pool = library.filter(
+      (e) =>
+        (e.channelIds.length === 0 || e.channelIds.includes(direction.channelId)) &&
+        !e.used &&
+        ['personal-story', 'lesson', 'build-project', 'gameplay-moment', 'movie-reaction', 'raw-idea', 'framework'].includes(e.type),
+    );
+    for (const e of pool.slice(0, 4)) {
+      push({
+        text: shortSubject(e.title, 9) ?? e.title,
+        detail: e.body || e.title,
+        experience: ['personal-story', 'lesson', 'build-project'].includes(e.type) ? e.body : '',
+        entryId: e.id,
+        grounded: true,
+      });
+    }
   }
+
+  // 5. Last resort: roll from the channel's own seed bank rather than emitting
+  //    something generic. An ungrounded seed is flagged on the card.
+  while (out.length === 0) {
+    const rolled = rollSeed(direction.channelId, out.map((s) => s.text));
+    if (!rolled) break;
+    push({ text: rolled, detail: rolled, experience: '', grounded: false });
+  }
+
   return out;
 }
 
@@ -137,137 +160,185 @@ interface Angle {
   formatId: string;
   emotionalAngle: string;
   effort: EffortLevel;
-  title: (s: Subject) => string;
-  premise: (s: Subject) => string;
-  viewerProblem: (s: Subject) => string;
-  corePromise: (s: Subject) => string;
+  title: (s: Seed) => string;
+  premise: (s: Seed) => string;
+  viewerProblem: (s: Seed) => string;
+  corePromise: (s: Seed) => string;
   bias: Partial<ScoreCard>;
 }
 
 const ANGLES: Record<ChannelId, Angle[]> = {
   'corey-williams': [
     {
-      id: 'structural',
-      label: 'The problem is structural, not moral',
-      formatId: 'framework-explainer',
-      emotionalAngle: 'Relief — it was never a character flaw',
-      effort: 'high',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} is a structure problem, not a willpower problem`),
-      premise: (s) => sentence(`Most attempts to change ${lowerFirst(s.phrase)} fail because the underlying structure still rewards the old behaviour`),
-      viewerProblem: () => 'They keep trying harder at something that is not a effort problem.',
-      corePromise: () => 'A model of where the behaviour is actually being produced, and which lever moves it.',
-      bias: { originality: 74, credibility: 80, emotionalTension: 72, brandValue: 84, clarity: 78 },
-    },
-    {
-      id: 'return-to-old-self',
-      label: 'Why the old version returns',
+      id: 'got-it-wrong',
+      label: 'What I got wrong',
       formatId: 'personal-essay',
       emotionalAngle: 'Recognition, then discomfort',
       effort: 'high',
-      title: () => titleCase(`You keep becoming the person you're trying to escape`),
-      premise: (s) => sentence(`People revert because they change behaviour while preserving the identity that produced it — ${lowerFirst(s.phrase)} is where that shows`),
-      viewerProblem: () => 'They start habits, hold them for weeks, and quietly return to baseline.',
-      corePromise: () => 'A precise account of the reversion mechanism, from someone who has watched it happen in himself.',
-      bias: { personalConnection: 86, emotionalTension: 88, originality: 66, brandValue: 88, curiosity: 80 },
+      title: (s) => `${Cap(s.text)} — What I Got Wrong for Five Years`,
+      premise: (s) => sentence(`A specific account of ${low(s.text)}, and the belief underneath it that kept producing the same outcome`),
+      viewerProblem: () => 'They have the same pattern and have been treating it as a discipline problem.',
+      corePromise: () => 'One honest post-mortem, with the mechanism named plainly.',
+      bias: { personalConnection: 90, credibility: 84, emotionalTension: 84, brandValue: 88, originality: 72 },
     },
     {
-      id: 'lived-counterpoint',
-      label: 'Counterpoint to received wisdom',
-      formatId: 'counterpoint',
-      emotionalAngle: 'Friction with something they already believe',
-      effort: 'medium',
-      title: (s) => titleCase(`The advice about ${lowerFirst(s.phrase)} is right and still useless`),
-      premise: (s) => sentence(`The standard advice on ${lowerFirst(s.phrase)} is technically correct but skips the condition that makes it applicable`),
-      viewerProblem: () => 'They have followed good advice and it did not work, and assume the fault is theirs.',
-      corePromise: () => 'The missing precondition, named plainly.',
-      bias: { originality: 82, emotionalTension: 76, credibility: 74, curiosity: 78, brandValue: 76 },
-    },
-    {
-      id: 'story-carrier',
-      label: 'One story carries the argument',
-      formatId: 'story-first',
-      emotionalAngle: 'Intimacy',
-      effort: 'medium',
-      title: (s) => titleCase(`What ${lowerFirst(s.phrase)} taught me about who I actually am`),
-      premise: (s) => sentence(`A single episode — ${lowerFirst(s.detail.slice(0, 90))} — exposes a belief that was running underneath everything else`),
-      viewerProblem: () => 'They understand the concept intellectually and have never felt it.',
-      corePromise: () => 'One concrete story, told honestly, with the conclusion earned rather than announced.',
-      bias: { personalConnection: 92, credibility: 82, originality: 70, emotionalTension: 84, visualPotential: 40 },
-    },
-    {
-      id: 'systems-of-self',
-      label: 'Systems thinking applied inward',
+      id: 'structure-not-willpower',
+      label: 'Structural, not moral',
       formatId: 'framework-explainer',
-      emotionalAngle: 'Clarity',
+      emotionalAngle: 'Relief — it was never a character flaw',
       effort: 'high',
-      title: (s) => titleCase(`${upperFirst(s.phrase)}, drawn as a loop`),
-      premise: (s) => sentence(`Treating ${lowerFirst(s.phrase)} as a feedback loop — belief, action, evidence — explains why the same outcome keeps arriving`),
-      viewerProblem: () => 'They think in incidents; the problem is a cycle.',
-      corePromise: () => 'A diagram they can hold in their head and a place to cut the loop.',
-      bias: { clarity: 86, originality: 72, visualPotential: 74, brandValue: 82, seriesPotential: 80 },
+      title: (s) => `${Cap(s.text)} Is a Structure Problem`,
+      premise: (s) => sentence(`${upperFirst(low(s.text))} persists because the structure around it keeps rewarding it, so effort alone produces temporary compliance`),
+      viewerProblem: () => 'They keep trying harder at something that is not an effort problem.',
+      corePromise: () => 'A model of where the behaviour is produced, and which lever actually moves it.',
+      bias: { originality: 76, clarity: 84, credibility: 80, brandValue: 86, visualPotential: 60, seriesPotential: 78 },
     },
     {
-      id: 'cost-of-position',
-      label: 'What this belief costs',
+      id: 'nobody-warns',
+      label: 'The unwarned part',
+      formatId: 'personal-essay',
+      emotionalAngle: 'Being told the thing nobody said',
+      effort: 'medium',
+      title: (s) => `Nobody Warns You About ${Cap(s.text)}`,
+      premise: (s) => sentence(`The part of ${low(s.text)} that does not appear in any advice, because it only shows up once you are already committed`),
+      viewerProblem: () => 'They followed good advice and hit something it never mentioned.',
+      corePromise: () => 'The missing precondition, named before they need it.',
+      bias: { curiosity: 84, emotionalTension: 80, personalConnection: 80, originality: 74 },
+    },
+    {
+      id: 'case-against',
+      label: 'Argue the other side',
+      formatId: 'counterpoint',
+      emotionalAngle: 'Friction with something they believe',
+      effort: 'medium',
+      title: (s) => `The Case Against ${Cap(s.text)}`,
+      premise: (s) => sentence(`Take the strongest argument against ${low(s.text)} seriously enough to be changed by it`),
+      viewerProblem: () => 'They hold the position without having tested it.',
+      corePromise: () => 'A real disagreement, defended, not a strawman knocked over.',
+      bias: { originality: 84, emotionalTension: 78, credibility: 78, curiosity: 80, brandValue: 78 },
+    },
+    {
+      id: 'what-it-cost',
+      label: 'The ledger',
       formatId: 'personal-essay',
       emotionalAngle: 'Sober accounting',
       effort: 'medium',
-      title: (s) => titleCase(`The hidden cost of being right about ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`Holding a defensible position on ${lowerFirst(s.phrase)} has a price that nobody itemises`),
-      viewerProblem: () => 'They win the argument and lose the relationship, repeatedly.',
-      corePromise: () => 'An honest ledger of what a principle costs in practice.',
-      bias: { emotionalTension: 82, personalConnection: 78, originality: 76, brandValue: 78 },
+      title: (s) => `${Cap(s.text)}, and What It Cost`,
+      premise: (s) => sentence(`An itemised account of what ${low(s.text)} actually cost — in time, relationships and options closed`),
+      viewerProblem: () => 'They can see the benefit and have never priced the bill.',
+      corePromise: () => 'An honest ledger, including the parts that still look worth it.',
+      bias: { emotionalTension: 84, personalConnection: 82, originality: 76, brandValue: 80 },
     },
     {
-      id: 'long-game',
+      id: 'twenty-years',
       label: 'Measured in decades',
       formatId: 'personal-essay',
       emotionalAngle: 'Weight',
       effort: 'high',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} in twenty years`),
-      premise: (s) => sentence(`Evaluating ${lowerFirst(s.phrase)} on a twenty-year horizon inverts almost every short-term recommendation`),
-      viewerProblem: () => 'Every decision is being optimised on a timescale that does not match their actual life.',
+      title: (s) => `${Cap(s.text)} in Twenty Years`,
+      premise: (s) => sentence(`Evaluating ${low(s.text)} on a twenty-year horizon, which inverts almost every short-term recommendation`),
+      viewerProblem: () => 'Every decision is optimised on a timescale that does not match their life.',
       corePromise: () => 'A longer measuring stick, and what it changes tomorrow morning.',
-      bias: { brandValue: 92, personalConnection: 80, credibility: 78, searchPotential: 30, sharePotential: 44 },
+      bias: { brandValue: 92, personalConnection: 80, credibility: 78, searchPotential: 30, sharePotential: 44, seriesPotential: 80 },
     },
     {
-      id: 'book-argument',
-      label: 'Argue with the book',
-      formatId: 'book-response',
-      emotionalAngle: 'Intellectual friction',
+      id: 'cannot-prove',
+      label: 'The honest limit',
+      formatId: 'personal-essay',
+      emotionalAngle: 'Trust through admission',
+      effort: 'medium',
+      title: (s) => `${Cap(s.text)}: the Part I Still Cannot Prove`,
+      premise: (s) => sentence(`Everything about ${low(s.text)} that holds up, and the one claim that rests on nothing but a decade of anecdote`),
+      viewerProblem: () => 'They have heard confident versions of this and no honest ones.',
+      corePromise: () => 'The argument and its exact edge, stated on camera.',
+      bias: { credibility: 92, originality: 84, personalConnection: 82, brandValue: 86, sharePotential: 44 },
+    },
+    {
+      id: 'loop',
+      label: 'Drawn as a loop',
+      formatId: 'framework-explainer',
+      emotionalAngle: 'Clarity',
       effort: 'high',
-      title: (s) => titleCase(`Where ${upperFirst(s.phrase)} gets it wrong`),
-      premise: (s) => sentence(`Taking ${lowerFirst(s.phrase)} seriously enough to disagree with it in a specific, testable place`),
-      viewerProblem: () => 'They have read the summary and mistaken it for understanding.',
-      corePromise: () => 'A real disagreement, defended, not a chapter recap.',
-      bias: { originality: 80, credibility: 84, searchPotential: 62, clarity: 76 },
+      title: (s) => `${Cap(s.text)}, Drawn as a Loop`,
+      premise: (s) => sentence(`Treating ${low(s.text)} as a feedback loop — belief, action, evidence — explains why the same outcome keeps arriving`),
+      viewerProblem: () => 'They think in incidents; the problem is a cycle.',
+      corePromise: () => 'A diagram they can hold in their head, and a place to cut the loop.',
+      bias: { clarity: 88, visualPotential: 78, originality: 74, brandValue: 82, seriesPotential: 82 },
     },
   ],
 
   'core-workshop': [
     {
-      id: 'before-after',
-      label: 'Visible transformation',
-      formatId: 'planned-build',
-      emotionalAngle: 'Satisfaction of a thing made right',
-      effort: 'high',
-      title: (s) => titleCase(`Rebuilding ${lowerFirst(s.phrase)} properly`),
-      premise: (s) => sentence(`Take ${lowerFirst(s.phrase)} from broken or improvised to correct, showing every decision and the one that was wrong`),
-      viewerProblem: () => 'They have the same problem and no reference for what "done properly" looks like.',
-      corePromise: () => 'A finished result with the reasoning and the failure left in.',
-      bias: { visualPotential: 90, credibility: 86, searchPotential: 74, clarity: 80, emotionalTension: 40 },
-    },
-    {
-      id: 'diagnosis',
-      label: 'Diagnose before replacing',
+      id: 'what-failed',
+      label: 'What actually failed',
       formatId: 'teardown',
       emotionalAngle: 'Detective satisfaction',
       effort: 'medium',
-      title: (s) => titleCase(`Why ${lowerFirst(s.phrase)} failed — and what I found inside`),
-      premise: (s) => sentence(`Diagnosis first: open ${lowerFirst(s.phrase)}, find the actual failure mode, then decide whether to fix or condemn it`),
+      title: (s) => `${Cap(s.text)} — What Actually Failed`,
+      premise: (s) => sentence(`Open up ${low(s.text)}, find the real failure mode rather than the obvious one, and decide whether to repair or condemn it`),
       viewerProblem: () => 'They replace parts by guesswork and pay for it twice.',
       corePromise: () => 'A repeatable diagnostic order of operations.',
-      bias: { credibility: 90, searchPotential: 84, visualPotential: 82, clarity: 82, curiosity: 74 },
+      bias: { credibility: 92, searchPotential: 86, visualPotential: 84, clarity: 84, curiosity: 78 },
+    },
+    {
+      id: 'done-properly',
+      label: 'Done properly',
+      formatId: 'planned-build',
+      emotionalAngle: 'Satisfaction of a thing made right',
+      effort: 'high',
+      title: (s) => `${Cap(s.text)}, Done Properly`,
+      premise: (s) => sentence(`Take ${low(s.text)} from improvised to correct, showing every decision and the one that was wrong`),
+      viewerProblem: () => 'They have the same job and no reference for what finished should look like.',
+      corePromise: () => 'A correct result with the reasoning and the failure left in.',
+      bias: { visualPotential: 90, credibility: 88, searchPotential: 78, clarity: 82, emotionalTension: 40 },
+    },
+    {
+      id: 'manual-does-not-say',
+      label: 'What the manual omits',
+      formatId: 'technique-explainer',
+      emotionalAngle: 'Insider knowledge',
+      effort: 'medium',
+      title: (s) => `${Cap(s.text)}: What the Manual Does Not Say`,
+      premise: (s) => sentence(`The field knowledge around ${low(s.text)} that is correct, load-bearing, and written down nowhere`),
+      viewerProblem: () => 'They followed the instructions exactly and it still went wrong.',
+      corePromise: () => 'The specific tolerance, tool or check that decides the outcome.',
+      bias: { searchPotential: 92, clarity: 88, credibility: 88, seriesPotential: 78, sharePotential: 48 },
+    },
+    {
+      id: 'already-in-the-shop',
+      label: 'Under constraint',
+      formatId: 'planned-build',
+      emotionalAngle: 'Resourcefulness',
+      effort: 'medium',
+      title: (s) => `${Cap(s.text)} With What Was Already in the Shop`,
+      premise: (s) => sentence(`Solve ${low(s.text)} under a hard constraint: no new purchases, existing tools and stock only`),
+      viewerProblem: () => 'Every build video assumes a tool budget they do not have.',
+      corePromise: () => 'A constrained solution that still meets spec, and where the constraint hurt.',
+      bias: { productionFeasibility: 88, originality: 80, visualPotential: 82, credibility: 80 },
+    },
+    {
+      id: 'left-in-the-edit',
+      label: 'The failure kept in',
+      formatId: 'planned-build',
+      emotionalAngle: 'Credibility through honesty',
+      effort: 'medium',
+      title: (s) => `${Cap(s.text)} — the Failure I Left in the Edit`,
+      premise: (s) => sentence(`The attempt at ${low(s.text)} that went wrong on camera, kept in, because the recovery is the useful part`),
+      viewerProblem: () => 'Every tutorial they watch works first time, which teaches them nothing.',
+      corePromise: () => 'A real failure and the diagnosis that followed it.',
+      bias: { credibility: 92, originality: 82, visualPotential: 80, emotionalTension: 66 },
+    },
+    {
+      id: 'what-goes-wrong',
+      label: 'Realistic failure modes',
+      formatId: 'technique-explainer',
+      emotionalAngle: 'Sober respect',
+      effort: 'low',
+      title: (s) => `What Goes Wrong With ${Cap(s.text)}`,
+      premise: (s) => sentence(`The realistic failure and injury modes around ${low(s.text)}, stated without panic or bravado`),
+      viewerProblem: () => 'They have seen the shortcut work on camera and never seen it fail.',
+      corePromise: () => 'The exact conditions under which the shortcut kills the job.',
+      bias: { credibility: 92, searchPotential: 78, clarity: 86, emotionalTension: 62 },
     },
     {
       id: 'field-solve',
@@ -275,209 +346,197 @@ const ANGLES: Record<ChannelId, Angle[]> = {
       formatId: 'job-site-solve',
       emotionalAngle: 'Competence under real conditions',
       effort: 'medium',
-      title: (s) => titleCase(`Real job, real problem: ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`POV footage of solving ${lowerFirst(s.phrase)} on an actual job, structured after the fact rather than staged`),
+      title: (s) => `Real Job, Real Problem: ${Cap(s.text)}`,
+      premise: (s) => sentence(`POV footage of solving ${low(s.text)} on an actual job, structured after the fact rather than staged`),
       viewerProblem: () => 'Tutorials show ideal conditions they never work in.',
-      corePromise: () => 'What the decision actually looks like when the wall is already open.',
-      bias: { credibility: 92, visualPotential: 84, productionFeasibility: 82, originality: 74, searchPotential: 62 },
+      corePromise: () => 'What the decision looks like when the wall is already open.',
+      bias: { credibility: 92, visualPotential: 84, productionFeasibility: 82, originality: 76 },
     },
     {
-      id: 'technique',
-      label: 'One technique, done right',
-      formatId: 'technique-explainer',
-      emotionalAngle: 'Confidence',
-      effort: 'medium',
-      title: (s) => titleCase(`How to ${lowerFirst(s.keyword || s.phrase)} without ruining it`),
-      premise: (s) => sentence(`A single technique for ${lowerFirst(s.phrase)}, with the tolerance, the tool and the mistake that ruins it`),
-      viewerProblem: () => 'They are one detail away from a correct result and do not know which detail.',
-      corePromise: () => 'The specific number, tool and check that decides the outcome.',
-      bias: { searchPotential: 92, clarity: 88, credibility: 84, seriesPotential: 78, sharePotential: 46 },
-    },
-    {
-      id: 'constraint-build',
-      label: 'Built with what I already own',
-      formatId: 'planned-build',
-      emotionalAngle: 'Resourcefulness',
-      effort: 'medium',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} using only what was already in the shop`),
-      premise: (s) => sentence(`Solve ${lowerFirst(s.phrase)} under a hard constraint: no new purchases, existing tools and stock only`),
-      viewerProblem: () => 'Every build video assumes a tool budget they do not have.',
-      corePromise: () => 'A constrained solution that still meets spec, and where the constraint hurt.',
-      bias: { productionFeasibility: 88, originality: 78, visualPotential: 80, credibility: 78 },
-    },
-    {
-      id: 'safety-truth',
-      label: 'The unglamorous safety reality',
-      formatId: 'technique-explainer',
-      emotionalAngle: 'Sober respect',
-      effort: 'low',
-      title: (s) => titleCase(`What actually goes wrong with ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`The realistic failure and injury modes around ${lowerFirst(s.phrase)}, stated without either panic or bravado`),
-      viewerProblem: () => 'They have seen the shortcut work on camera and not seen it fail.',
-      corePromise: () => 'The specific conditions under which the shortcut kills the job or the person.',
-      bias: { credibility: 92, searchPotential: 76, clarity: 86, visualPotential: 60, emotionalTension: 62 },
-    },
-    {
-      id: 'iteration',
-      label: 'Version two of a previous build',
+      id: 'v2',
+      label: 'Version two',
       formatId: 'planned-build',
       emotionalAngle: 'Progress you can see',
       effort: 'medium',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} v2 — fixing what I got wrong`),
-      premise: (s) => sentence(`Return to ${lowerFirst(s.phrase)} with the failures from version one as the design brief`),
+      title: (s) => `${Cap(s.text)} v2 — Fixing What I Got Wrong`,
+      premise: (s) => sentence(`Return to ${low(s.text)} with the failures from version one as the design brief`),
       viewerProblem: () => 'They only ever see version one, which is the version that hides the lessons.',
-      corePromise: () => 'A design changed by real use, with the before-and-after data.',
-      bias: { seriesPotential: 90, credibility: 86, visualPotential: 82, brandValue: 76 },
+      corePromise: () => 'A design changed by real use, with before-and-after data.',
+      bias: { seriesPotential: 90, credibility: 86, visualPotential: 84, brandValue: 78 },
     },
   ],
 
   cdogg: [
     {
-      id: 'clutch-moment',
-      label: 'One moment, replayed',
+      id: 'rewound',
+      label: 'One moment, rewound',
       formatId: 'moment-deep-dive',
       emotionalAngle: 'Adrenaline then explanation',
       effort: 'low',
-      title: (s) => titleCase(`This should not have worked — ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`Open on the moment from ${lowerFirst(s.phrase)}, then rewind and explain what actually made it land`),
-      viewerProblem: () => 'They want the highlight and the reason it worked, not one without the other.',
+      title: (s) => `${Cap(s.text)} — Rewound and Explained`,
+      premise: (s) => sentence(`Open on ${low(s.text)}, then rewind and explain what actually made it work`),
+      viewerProblem: () => 'They want the highlight and the reason, not one without the other.',
       corePromise: () => 'The clip, then the read behind it.',
-      bias: { sharePotential: 88, emotionalTension: 84, productionFeasibility: 92, curiosity: 82, visualPotential: 82 },
+      bias: { sharePotential: 88, emotionalTension: 84, productionFeasibility: 92, curiosity: 84, visualPotential: 82 },
     },
     {
-      id: 'session-arc',
-      label: 'Session with a shape',
-      formatId: 'session-highlights',
-      emotionalAngle: 'Company',
+      id: 'should-not-have-worked',
+      label: 'Should not have worked',
+      formatId: 'moment-deep-dive',
+      emotionalAngle: 'Disbelief',
       effort: 'low',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} — the run that went completely sideways`),
-      premise: (s) => sentence(`Cut one recorded session of ${lowerFirst(s.phrase)} into an arc with a real turn in the middle`),
-      viewerProblem: () => 'Most highlight reels have no shape and blur together.',
-      corePromise: () => 'A session that goes somewhere, edited from footage that already exists.',
-      bias: { productionFeasibility: 94, audienceRelevance: 84, sharePotential: 74, personalConnection: 78 },
+      title: (s) => `This Should Not Have Worked: ${Cap(s.text)}`,
+      premise: (s) => sentence(`Break down ${low(s.text)} — the play that had no business landing, and the three things that quietly made it possible`),
+      viewerProblem: () => 'They see the clip and cannot tell luck from a read.',
+      corePromise: () => 'An honest split between skill and luck.',
+      bias: { sharePotential: 90, curiosity: 86, emotionalTension: 82, productionFeasibility: 90 },
     },
     {
-      id: 'systems-read',
-      label: 'Why the system is designed that way',
-      formatId: 'systems-essay',
-      emotionalAngle: 'The satisfying click of understanding',
-      effort: 'medium',
-      title: (s) => titleCase(`The hidden rule that makes ${lowerFirst(s.phrase)} work`),
-      premise: (s) => sentence(`Break down the underlying system in ${lowerFirst(s.phrase)} and why it produces the moments players remember`),
-      viewerProblem: () => 'They feel the design working and cannot name it.',
-      corePromise: () => 'The mechanic explained by someone who plays it and thinks about systems for a living.',
-      bias: { originality: 80, clarity: 74, curiosity: 84, brandValue: 70, searchPotential: 70, credibility: 72 },
-    },
-    {
-      id: 'disaster',
+      id: 'everything-wrong',
       label: 'The disaster run',
       formatId: 'session-highlights',
       emotionalAngle: 'Comedy of failure',
       effort: 'low',
-      title: (s) => titleCase(`Everything that could go wrong in ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`A full compilation of the ways ${lowerFirst(s.phrase)} fell apart, with commentary that does not pretend it was skill`),
+      title: (s) => `Everything That Went Wrong: ${Cap(s.text)}`,
+      premise: (s) => sentence(`A compilation of every way ${low(s.text)} fell apart, narrated without pretending it was skill`),
       viewerProblem: () => 'They want to laugh with someone, not be lectured at.',
       corePromise: () => 'Honest failure, funny reactions, no fake competence.',
-      bias: { sharePotential: 90, emotionalTension: 78, productionFeasibility: 92, personalConnection: 82, credibility: 40 },
+      bias: { sharePotential: 90, emotionalTension: 78, productionFeasibility: 94, personalConnection: 84, credibility: 40 },
     },
     {
-      id: 'creation-showcase',
-      label: 'Show what you built',
-      formatId: 'build-showcase',
-      emotionalAngle: 'Pride and playfulness',
+      id: 'rule-behind-it',
+      label: 'The systems read',
+      formatId: 'systems-essay',
+      emotionalAngle: 'The satisfying click of understanding',
+      effort: 'medium',
+      title: (s) => `${Cap(s.text)}, and the Rule Behind It`,
+      premise: (s) => sentence(`Use ${low(s.text)} to explain the underlying system, and why it produces the moments players remember`),
+      viewerProblem: () => 'They feel the design working and cannot name it.',
+      corePromise: () => 'The mechanic explained by someone who plays it and thinks in systems.',
+      bias: { originality: 82, curiosity: 84, clarity: 76, brandValue: 72, searchPotential: 72, credibility: 74 },
+    },
+    {
+      id: 'best-bits',
+      label: 'Session with a shape',
+      formatId: 'session-highlights',
+      emotionalAngle: 'Company',
       effort: 'low',
-      title: (s) => titleCase(`Building ${lowerFirst(s.phrase)} and immediately regretting it`),
-      premise: (s) => sentence(`Create ${lowerFirst(s.phrase)} on camera, narrate the choices, let the result speak`),
-      viewerProblem: () => 'They want ideas for their own game and personality while they get them.',
-      corePromise: () => 'A build worth copying and someone entertaining while it happens.',
-      bias: { visualPotential: 86, productionFeasibility: 88, audienceRelevance: 82, sharePotential: 72 },
+      title: (s) => `${Cap(s.text)} — Best Bits`,
+      premise: (s) => sentence(`Cut the ${low(s.text)} footage into an arc with a real turn in the middle, not a flat highlight reel`),
+      viewerProblem: () => 'Most highlight reels have no shape and blur together.',
+      corePromise: () => 'A session that goes somewhere, cut from footage that already exists.',
+      bias: { productionFeasibility: 96, audienceRelevance: 84, sharePotential: 76, personalConnection: 78 },
     },
     {
-      id: 'patch-take',
-      label: 'Timely patch or release reaction',
+      id: 'cannot-stop',
+      label: 'Obsession',
       formatId: 'first-look',
-      emotionalAngle: 'Opinion with stakes',
+      emotionalAngle: 'Enthusiasm',
       effort: 'low',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} changed everything — here's what actually matters`),
-      premise: (s) => sentence(`React to ${lowerFirst(s.phrase)} while it is current, filtering hype from the changes that alter how the game is played`),
-      viewerProblem: () => 'Patch notes are long and most reactions are noise.',
-      corePromise: () => 'The two or three changes that genuinely matter, quickly.',
-      bias: { audienceRelevance: 90, sharePotential: 78, productionFeasibility: 86, seriesPotential: 74, originality: 52 },
+      title: (s) => `I Cannot Stop Thinking About ${Cap(s.text)}`,
+      premise: (s) => sentence(`Why ${low(s.text)} has been rattling around all week, and what that says about the design`),
+      viewerProblem: () => 'They half-noticed the same thing and moved on.',
+      corePromise: () => 'Genuine enthusiasm with an actual argument under it.',
+      bias: { audienceRelevance: 88, sharePotential: 78, productionFeasibility: 88, personalConnection: 82 },
     },
     {
-      id: 'shorts-pack',
-      label: 'Shorts from existing footage',
+      id: 'vertical',
+      label: 'Shorts pack',
       formatId: 'shorts-pack',
       emotionalAngle: 'Fast hits',
       effort: 'low',
-      title: (s) => titleCase(`Best of ${lowerFirst(s.phrase)} — vertical cuts`),
-      premise: (s) => sentence(`Pull three to five vertical clips out of the ${lowerFirst(s.phrase)} recordings already on disk`),
+      title: (s) => `${Cap(s.text)} (Vertical Cuts)`,
+      premise: (s) => sentence(`Pull three to five vertical clips out of the ${low(s.text)} recordings already on disk`),
       viewerProblem: () => 'They discover channels through Shorts and never see the long form.',
       corePromise: () => 'Free reach from footage that already exists.',
-      bias: { productionFeasibility: 96, sharePotential: 86, visualPotential: 78, brandValue: 42, seriesPotential: 60 },
+      bias: { productionFeasibility: 96, sharePotential: 86, visualPotential: 78, brandValue: 42 },
+    },
+    {
+      id: 'first-look',
+      label: 'First look, no research',
+      formatId: 'first-look',
+      emotionalAngle: 'Unfiltered reaction',
+      effort: 'low',
+      title: (s) => `${Cap(s.text)} — First Look, No Research`,
+      premise: (s) => sentence(`Go into ${low(s.text)} completely cold and narrate the actual experience, wrong guesses included`),
+      viewerProblem: () => 'Every other take has been rehearsed after three hours of reading.',
+      corePromise: () => 'A genuinely first reaction, with the mistakes left in.',
+      bias: { audienceRelevance: 90, productionFeasibility: 92, sharePotential: 76, originality: 58 },
     },
   ],
 
   'worlds-finest': [
     {
       id: 'honest-reaction',
-      label: 'Honest first reaction',
+      label: 'Honest reaction',
       formatId: 'reaction-card',
-      emotionalAngle: 'Enthusiasm or disappointment, unfiltered',
+      emotionalAngle: 'Unfiltered enthusiasm or disappointment',
       effort: 'low',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} — my honest reaction`),
-      premise: (s) => sentence(`Say what ${lowerFirst(s.phrase)} actually felt like to watch, including the parts that did not work`),
+      title: (s) => `${Cap(s.text)} — Honest Reaction`,
+      premise: (s) => sentence(`Say what ${low(s.text)} actually felt like, including the parts that did not work`),
       viewerProblem: () => 'Most reaction content is performed rather than felt.',
       corePromise: () => 'A real opinion from someone who grew up with these characters.',
-      bias: { personalConnection: 90, emotionalTension: 82, productionFeasibility: 94, originality: 46 },
+      bias: { personalConnection: 90, emotionalTension: 82, productionFeasibility: 94, originality: 48 },
     },
     {
-      id: 'expectation-gap',
-      label: 'What I expected vs what I got',
+      id: 'expected-different',
+      label: 'Expectation gap',
       formatId: 'reaction-card',
       emotionalAngle: 'Anticipation meeting reality',
       effort: 'low',
-      title: (s) => titleCase(`I expected something completely different from ${lowerFirst(s.phrase)}`),
-      premise: (s) => sentence(`Compare the version of ${lowerFirst(s.phrase)} in your head beforehand with the one that actually showed up`),
+      title: (s) => `I Expected Something Completely Different: ${Cap(s.text)}`,
+      premise: (s) => sentence(`Compare the version of ${low(s.text)} in my head beforehand with the one that actually showed up`),
       viewerProblem: () => 'They had the same expectations and want to know if they were alone.',
-      corePromise: () => 'A specific, personal before-and-after rather than a score out of ten.',
-      bias: { personalConnection: 88, emotionalTension: 84, curiosity: 72, productionFeasibility: 92 },
+      corePromise: () => 'A specific personal before-and-after, not a score out of ten.',
+      bias: { personalConnection: 88, emotionalTension: 84, curiosity: 74, productionFeasibility: 92 },
     },
     {
-      id: 'character-history',
-      label: 'The comic history behind it',
+      id: 'from-the-page',
+      label: 'Where it came from',
       formatId: 'nostalgia-piece',
       emotionalAngle: 'Nostalgia and affection',
       effort: 'low',
-      title: (s) => titleCase(`The comic run that ${lowerFirst(s.phrase)} came from`),
-      premise: (s) => sentence(`Where ${lowerFirst(s.phrase)} comes from on the page, and whether the adaptation understood it`),
+      title: (s) => `${Cap(s.text)}, and Where It Came From on the Page`,
+      premise: (s) => sentence(`Where ${low(s.text)} comes from in the comics, and whether the adaptation understood it`),
       viewerProblem: () => 'They enjoyed it and have no idea what it is referencing.',
-      corePromise: () => 'The source material context, told by someone who actually read it.',
-      bias: { personalConnection: 86, credibility: 74, audienceRelevance: 72, productionFeasibility: 88 },
-    },
-    {
-      id: 'trailer-take',
-      label: 'Same-day trailer take',
-      formatId: 'trailer-take',
-      emotionalAngle: 'Excitement',
-      effort: 'low',
-      title: (s) => titleCase(`${upperFirst(s.phrase)} trailer — first thoughts`),
-      premise: (s) => sentence(`Five honest minutes on the ${lowerFirst(s.phrase)} trailer, same day, no research pass`),
-      viewerProblem: () => 'They want a take from someone whose taste they know.',
-      corePromise: () => 'Fast, unpolished, genuine.',
-      bias: { productionFeasibility: 96, personalConnection: 82, emotionalTension: 74, originality: 40 },
+      corePromise: () => 'Source context from someone who actually read it.',
+      bias: { personalConnection: 86, credibility: 76, audienceRelevance: 74, productionFeasibility: 88 },
     },
     {
       id: 'holds-up',
-      label: 'Does it hold up?',
+      label: 'Does it hold up',
       formatId: 'nostalgia-piece',
       emotionalAngle: 'Affection tested',
       effort: 'low',
-      title: (s) => titleCase(`Rewatching ${lowerFirst(s.phrase)} years later`),
-      premise: (s) => sentence(`Watch ${lowerFirst(s.phrase)} again with adult eyes and report honestly on what survived`),
+      title: (s) => `Rewatching ${Cap(s.text)} Years Later`,
+      premise: (s) => sentence(`Watch ${low(s.text)} again with adult eyes and report honestly on what survived`),
       viewerProblem: () => 'They remember loving it and are afraid to check.',
       corePromise: () => 'An honest verdict from someone with the same memory.',
-      bias: { personalConnection: 88, emotionalTension: 78, productionFeasibility: 90, seriesPotential: 68 },
+      bias: { personalConnection: 88, emotionalTension: 78, productionFeasibility: 90, seriesPotential: 70 },
+    },
+    {
+      id: 'first-thoughts',
+      label: 'Same-day take',
+      formatId: 'trailer-take',
+      emotionalAngle: 'Excitement',
+      effort: 'low',
+      title: (s) => `${Cap(s.text)} — First Thoughts`,
+      premise: (s) => sentence(`Five honest minutes on ${low(s.text)}, same day, no research pass`),
+      viewerProblem: () => 'They want a take from someone whose taste they know.',
+      corePromise: () => 'Fast, unpolished, genuine.',
+      bias: { productionFeasibility: 96, personalConnection: 82, emotionalTension: 74, originality: 42 },
+    },
+    {
+      id: 'actually-landed',
+      label: 'The part that landed',
+      formatId: 'reaction-card',
+      emotionalAngle: 'Specific appreciation',
+      effort: 'low',
+      title: (s) => `${Cap(s.text)}: the Part That Actually Landed`,
+      premise: (s) => sentence(`Skip the plot summary and talk about the one moment in ${low(s.text)} that did the work`),
+      viewerProblem: () => 'Every review recaps the plot and never says what moved them.',
+      corePromise: () => 'One moment, taken seriously.',
+      bias: { personalConnection: 88, emotionalTension: 86, curiosity: 76, productionFeasibility: 90 },
     },
   ],
 };
@@ -488,7 +547,7 @@ const ANGLES: Record<ChannelId, Angle[]> = {
 
 function baseScores(
   angle: Angle,
-  subject: Subject,
+  subject: Seed,
   ctx: GenerationContext,
   r: () => number,
 ): ScoreCard {
@@ -596,23 +655,26 @@ export class LocalEngine implements CreativeEngine {
     const { context: ctx, count, origin } = req;
     const cid = ctx.direction.channelId;
     const ch = CHANNELS[cid];
-    const subjects = buildSubjects(ctx, req);
+    const seeds = buildSeeds(ctx, req);
     const angles = ANGLES[cid];
-    const seed = `${cid}|${ctx.direction.topic}|${origin}|${req.steer ?? ''}|${Date.now()}`;
-    const r = rng(seed);
+    const r = rng(`${cid}|${req.seed ?? ctx.direction.topic}|${origin}|${req.steer ?? ''}|${Date.now()}`);
+
+    if (seeds.length === 0) return [];
 
     const ideas: Idea[] = [];
     const usedCombos = new Set<string>();
 
     for (let i = 0; i < count; i++) {
-      let subject = subjects[i % subjects.length];
+      // Vary the angle first: with one seed and ten ideas the user wants ten
+      // different takes on their seed, not the same take on ten topics.
+      let subject = seeds[Math.floor(i / angles.length) % seeds.length];
       let angle = angles[(i + Math.floor(r() * angles.length)) % angles.length];
-      let key = `${subject.phrase}|${angle.id}`;
+      let key = `${subject.text}|${angle.id}`;
       let guard = 0;
-      while (usedCombos.has(key) && guard++ < 12) {
-        subject = pick(subjects, r);
+      while (usedCombos.has(key) && guard++ < 24) {
         angle = pick(angles, r);
-        key = `${subject.phrase}|${angle.id}`;
+        if (guard > 12) subject = pick(seeds, r);
+        key = `${subject.text}|${angle.id}`;
       }
       usedCombos.add(key);
 
@@ -732,10 +794,9 @@ export class LocalEngine implements CreativeEngine {
     const from = CHANNELS[idea.channelId];
     const to = CHANNELS[target];
     const angle = ANGLES[target][0];
-    const subject: Subject = {
-      phrase: subjectPhrase(idea.workingTitle),
+    const subject: Seed = {
+      text: shortSubject(idea.workingTitle, 9) ?? subjectPhrase(idea.workingTitle),
       detail: idea.premise,
-      keyword: keywords(idea.workingTitle, 3).join(' '),
       experience: idea.authorityBasis,
       grounded: true,
     };

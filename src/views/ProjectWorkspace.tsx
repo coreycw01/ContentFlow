@@ -1,21 +1,23 @@
 import { CHANNELS } from '../domain/channels';
 import { nextAction, publishGate, recordGate, scriptGate } from '../domain/readiness';
 import { STAGES, stageDef } from '../domain/stages';
-import type { Priority, Stage } from '../domain/types';
+import type { Priority, Stage, VideoStatusKey } from '../domain/types';
 import { useStore } from '../store/store';
-import { Chip, Empty, LazyInput } from '../ui/components';
+import { Chip, Empty, LazyInput, relativeDays } from '../ui/components';
 import { navigate } from '../ui/router';
 import { ConceptTab } from './project/Concept';
 import { PackagingTab } from './project/Packaging';
 import { ProductionTab } from './project/Production';
 import { ReviewTab } from './project/Review';
+import { ScriptDocTab } from './project/ScriptDoc';
 import { ScriptTab } from './project/Script';
 import { TimelineTab } from './project/Timeline';
 
 const TABS = [
   { id: 'concept', label: 'Concept' },
   { id: 'packaging', label: 'Packaging' },
-  { id: 'script', label: 'Script' },
+  { id: 'script', label: 'Script Studio' },
+  { id: 'doc', label: 'Script Doc & Assets' },
   { id: 'timeline', label: 'Timeline & B-roll' },
   { id: 'production', label: 'Production' },
   { id: 'review', label: 'Review' },
@@ -26,6 +28,7 @@ export function ProjectWorkspace({ projectId, tab = 'concept' }: { projectId?: s
   const updateProject = useStore((s) => s.updateProject);
   const setStage = useStore((s) => s.setStage);
   const deleteProject = useStore((s) => s.deleteProject);
+  const setVideoStatus = useStore((s) => s.setVideoStatus);
 
   if (!project) {
     return (
@@ -66,7 +69,30 @@ export function ProjectWorkspace({ projectId, tab = 'concept' }: { projectId?: s
           </div>
         </div>
 
-        <div className="row optional-controls" style={{ marginTop: 14, gap: 10 }}>
+        <div className="row" style={{ marginTop: 14, gap: 6 }}>
+          <span className="small dim" style={{ marginRight: 2 }}>Video</span>
+          {(
+            [
+              ['recordedAt', 'Recorded'],
+              ['editedAt', 'Edited'],
+              ['uploadedAt', 'Uploaded'],
+            ] as [VideoStatusKey, string][]
+          ).map(([key, label]) => {
+            const on = !!project.videoStatus[key];
+            return (
+              <button
+                key={key}
+                className={`btn small${on ? ' primary' : ''}`}
+                title={on ? `Marked ${label.toLowerCase()} ${relativeDays(project.videoStatus[key])}` : `Mark ${label.toLowerCase()}`}
+                onClick={() => setVideoStatus(project.id, key, !on)}
+              >
+                {on ? '✓ ' : ''}{label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="row optional-controls" style={{ marginTop: 12, gap: 10 }}>
           <label className="row small" style={{ gap: 6 }}>
             <span className="dim">Stage</span>
             <select value={project.stage} onChange={(e) => setStage(project.id, e.target.value as Stage)}>
@@ -151,6 +177,7 @@ export function ProjectWorkspace({ projectId, tab = 'concept' }: { projectId?: s
       {tab === 'concept' && <ConceptTab projectId={project.id} />}
       {tab === 'packaging' && <PackagingTab projectId={project.id} />}
       {tab === 'script' && <ScriptTab projectId={project.id} />}
+      {tab === 'doc' && <ScriptDocTab projectId={project.id} />}
       {tab === 'timeline' && <TimelineTab projectId={project.id} />}
       {tab === 'production' && <ProductionTab projectId={project.id} />}
       {tab === 'review' && <ReviewTab projectId={project.id} />}

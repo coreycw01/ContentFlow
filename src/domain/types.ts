@@ -325,6 +325,69 @@ export type SectionAction =
   | 'preserve-wording';
 
 // ---------------------------------------------------------------------------
+// Script document (Level 4 storage, or a script written anywhere else)
+// ---------------------------------------------------------------------------
+
+export interface ScriptDoc {
+  /** The script text itself. Written here, pasted in, or synced from a doc. */
+  content: string;
+  /** Where the canonical copy lives, when it is not this app. */
+  googleDocUrl?: string;
+  /** Free-form label for any other external home (Notion, Drive, a file). */
+  externalLabel?: string;
+  source: 'app' | 'pasted' | 'google-docs' | 'assembled';
+  updatedAt?: string;
+  /** Words at the last save, so drift against the beat sheet is visible. */
+  wordCount: number;
+}
+
+/**
+ * Something the script asks for that has to be produced or found: an image,
+ * a B-roll shot, a graphic, a citation. Extracted by scanning the script text.
+ */
+export type AssetKind =
+  | 'image'
+  | 'b-roll'
+  | 'graphic'
+  | 'screen-recording'
+  | 'gameplay'
+  | 'source'
+  | 'placeholder';
+
+export type AssetStatus = 'needed' | 'have' | 'done';
+
+export interface ScannedAsset {
+  id: string;
+  kind: AssetKind;
+  /** The exact text that matched, so the user can find it in the script. */
+  raw: string;
+  description: string;
+  /** 1-indexed line in the script, for locating it. */
+  line: number;
+  status: AssetStatus;
+  /** Generated for image/graphic kinds. */
+  imagePrompt?: string;
+  /** Set when the user matches it to something already in the library. */
+  linkedEntryId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Video production status
+// ---------------------------------------------------------------------------
+
+/**
+ * The physical state of the video, tracked separately from the pipeline stage.
+ * Stage is where the work is; this is what actually exists.
+ */
+export interface VideoStatus {
+  recordedAt?: string;
+  editedAt?: string;
+  uploadedAt?: string;
+}
+
+export type VideoStatusKey = keyof VideoStatus;
+
+// ---------------------------------------------------------------------------
 // Production board
 // ---------------------------------------------------------------------------
 
@@ -421,7 +484,13 @@ export interface ContentProject {
   concept: ConceptCanvas;
   packaging: Packaging;
   script: Script;
+  /** The script as a document, however it got here. */
+  scriptDoc: ScriptDoc;
+  /** Images, B-roll and citations the script asks for. */
+  assets: ScannedAsset[];
   production: ProductionTask[];
+  /** What physically exists: recorded, edited, uploaded. */
+  videoStatus: VideoStatus;
   review?: PerformanceReview;
   targetPublishDate?: string;
   publishedAt?: string;

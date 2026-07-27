@@ -9,6 +9,7 @@ import type { ContentProject, Idea } from '../domain/types';
 import { useStore } from '../store/store';
 import { Card, Chip, Empty, Stat, Why, relativeDays } from '../ui/components';
 import { navigate } from '../ui/router';
+import { ChannelHome } from './ChannelHome';
 
 export function CommandCenter() {
   const projects = useStore((s) => s.projects);
@@ -64,6 +65,10 @@ export function CommandCenter() {
     .filter((p) => p.targetPublishDate)
     .sort((a, b) => (a.targetPublishDate ?? '').localeCompare(b.targetPublishDate ?? ''))
     .slice(0, 6);
+
+  // Inside a channel workspace the home screen is that channel's own, built
+  // from the panels its doctrine needs rather than a shared dashboard.
+  if (active) return <ChannelHome channelId={active} />;
 
   return (
     <div className="col" style={{ gap: 14 }}>
@@ -277,7 +282,10 @@ function ideaAsPseudo(i: Idea): ContentProject {
     },
     packaging: { titles: [], hooks: [], thumbnails: [], curiosityGaps: [], stakes: [], emotionalFraming: [] },
     script: { beats: [], estimatedDurationSeconds: 0, chapterMarkers: [] },
+    scriptDoc: { content: '', source: 'app', wordCount: 0 },
+    assets: [],
     production: [],
+    videoStatus: {},
     brandAssociations: [],
     notes: '',
     effort: i.effort,

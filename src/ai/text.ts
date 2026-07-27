@@ -79,8 +79,10 @@ export function subjectPhrase(text: string, fallback = 'this'): string {
 export function shortSubject(text: string, maxWords = 6): string | null {
   const cleaned = text.trim().replace(/[.?!]+$/, '');
   if (!cleaned) return null;
+  // The leading article is kept on purpose: stripping it turns "the third
+  // week" into "Third Week", and every template that inlines it then reads
+  // "The Case Against Third Week".
   const stripped = cleaned
-    .replace(/^(the |a |an )/i, '')
     .replace(/^(you|i|we|they|he|she)\s+(keep|kept|are|is|was|were|will|would|should|can|could|don'?t|do|did|need|needed)\s+/i, '')
     .replace(/^(why|how|what|when)\s+/i, '');
   const words = stripped.split(/\s+/);

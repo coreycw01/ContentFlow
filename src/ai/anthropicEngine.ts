@@ -157,6 +157,9 @@ export class AnthropicEngine implements CreativeEngine {
 
     const user = [
       `Generate ${req.count} video idea${req.count === 1 ? '' : 's'} for ${ch.name}.`,
+      req.seed?.trim()
+        ? `THE SEED — every idea must grow from this, and the phrase should be recognisable in each title: "${req.seed.trim()}". Give ${req.count === 1 ? 'it' : 'each'} a genuinely different angle on the same seed; do not drift to a neighbouring topic.`
+        : 'No seed given, so draw from the library and the direction below.',
       originInstruction[req.origin] ?? originInstruction.focused,
       req.steer ? `Additional steer: ${req.steer}` : '',
       '',
